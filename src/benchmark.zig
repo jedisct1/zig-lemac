@@ -5,26 +5,24 @@ const time = std.time;
 const Timer = time.Timer;
 const crypto = std.crypto;
 const mem = std.mem;
+const Io = std.Io;
 
 const lemac = @import("lemac.zig");
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
 
-// Minimum time to run each benchmark (in nanoseconds)
-const MIN_BENCH_TIME_NS = 500 * time.ns_per_ms; // 500ms
+const MIN_BENCH_TIME_NS = 500 * time.ns_per_ms;
 
 var prng = std.Random.DefaultPrng.init(0x12345678);
 const random = prng.random();
 
-/// Generic MAC benchmark result
 const BenchResult = struct {
-    throughput_mbps: f64, // megabits per second
+    throughput_mbps: f64,
     iterations: u64,
     total_bytes: u64,
 };
 
-/// Benchmark a MAC that follows the standard library interface (create function)
 fn benchmarkStdMac(comptime Mac: type, data: []const u8) !BenchResult {
     var key: [Mac.key_length]u8 = undefined;
     random.bytes(&key);
@@ -57,7 +55,6 @@ fn benchmarkStdMac(comptime Mac: type, data: []const u8) !BenchResult {
     };
 }
 
-/// Benchmark LeMac variants (different API)
 fn benchmarkLeMac(comptime LeMacType: type, data: []const u8) !BenchResult {
     var key: [LeMacType.key_size]u8 = undefined;
     var nonce: [LeMacType.nonce_size]u8 = undefined;
@@ -93,7 +90,7 @@ fn benchmarkLeMac(comptime LeMacType: type, data: []const u8) !BenchResult {
     };
 }
 
-fn printHeader(stdout: *std.Io.Writer) !void {
+fn printHeader(stdout: *Io.Writer) !void {
     try stdout.print("\n{s:>20} | {s:>8} | {s:>8} | {s:>8} | {s:>8} | {s:>8}\n", .{
         "Algorithm",
         "64 B",
@@ -110,13 +107,13 @@ fn printHeader(stdout: *std.Io.Writer) !void {
 }
 
 fn formatThroughput(throughput: f64) [8]u8 {
-    var buf: [8]u8 = .{' '} ** 8;
+    var buf: [8]u8 = @splat(' ');
     _ = std.fmt.bufPrint(&buf, "{d:>8.0}", .{throughput}) catch unreachable;
     return buf;
 }
 
 fn runBenchSuite(
-    stdout: *std.Io.Writer,
+    stdout: *Io.Writer,
     name: []const u8,
     benchFn: anytype,
     data_64: []const u8,
@@ -144,7 +141,8 @@ fn runBenchSuite(
 
 pub fn main() !void {
     var stdout_buffer: [0x200]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const io = Io.Threaded.global_single_threaded.io();
+    var stdout_writer = Io.File.stdout().writer(io, &stdout_buffer);
     const stdout = &stdout_writer.interface;
 
     try stdout.print("MAC Benchmark - Throughput in Mb/s (higher is better)\n", .{});
@@ -152,7 +150,6 @@ pub fn main() !void {
     try stdout.print("Min benchmark time: {d}ms per size\n", .{MIN_BENCH_TIME_NS / time.ns_per_ms});
     try stdout.flush();
 
-    // Allocate test data
     var data_64: [64]u8 = undefined;
     var data_256: [256]u8 = undefined;
     var data_1k: [1 * KiB]u8 = undefined;
@@ -165,10 +162,8 @@ pub fn main() !void {
     random.bytes(&data_8k);
     random.bytes(&data_64k);
 
-    // Print header
     try printHeader(stdout);
 
-    // LeMac variants
     try runBenchSuite(
         stdout,
         "LeMac",
@@ -214,13 +209,11 @@ pub fn main() !void {
         &data_64k,
     );
 
-    // Separator
     try stdout.print("{s:->21}+{s:->10}+{s:->10}+{s:->10}+{s:->10}+{s:->10}\n", .{
         "", "", "", "", "", "",
     });
     try stdout.flush();
 
-    // AEGIS-MAC variants
     try runBenchSuite(
         stdout,
         "AEGIS-128L-MAC",
@@ -266,13 +259,11 @@ pub fn main() !void {
         &data_64k,
     );
 
-    // Separator
     try stdout.print("{s:->21}+{s:->10}+{s:->10}+{s:->10}+{s:->10}+{s:->10}\n", .{
         "", "", "", "", "", "",
     });
     try stdout.flush();
 
-    // HMAC-SHA256
     try runBenchSuite(
         stdout,
         "HMAC-SHA256",
