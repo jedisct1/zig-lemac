@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const time = std.time;
-const Timer = time.Timer;
 const crypto = std.crypto;
 const mem = std.mem;
 const Io = std.Io;
@@ -12,10 +11,12 @@ const lemac = @import("lemac.zig");
 const KiB = 1024;
 const MiB = 1024 * KiB;
 
-const MIN_BENCH_TIME_NS = 500 * time.ns_per_ms;
+const MIN_BENCH_TIME: Io.Duration = .fromMilliseconds(500);
 
 var prng = std.Random.DefaultPrng.init(0x12345678);
 const random = prng.random();
+
+var global_io: Io = undefined;
 
 const BenchResult = struct {
     throughput_mbps: f64,
@@ -23,27 +24,27 @@ const BenchResult = struct {
     total_bytes: u64,
 };
 
-fn benchmarkStdMac(comptime Mac: type, data: []const u8) !BenchResult {
+fn benchmarkStdMac(comptime Mac: type, data: []const u8) BenchResult {
     var key: [Mac.key_length]u8 = undefined;
     random.bytes(&key);
 
     var mac: [Mac.mac_length]u8 = undefined;
     var iterations: u64 = 0;
 
-    var timer = try Timer.start();
-    const start = timer.lap();
+    const start = Io.Clock.awake.now(global_io);
 
     while (true) {
         Mac.create(&mac, data, &key);
         mem.doNotOptimizeAway(&mac);
         iterations += 1;
 
-        const elapsed = timer.read() - start;
-        if (elapsed >= MIN_BENCH_TIME_NS) break;
+        const elapsed = start.durationTo(Io.Clock.awake.now(global_io));
+        if (elapsed.nanoseconds >= MIN_BENCH_TIME.nanoseconds) break;
     }
 
-    const end = timer.read();
-    const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
+    const end = Io.Clock.awake.now(global_io);
+    const elapsed_ns = end.nanoseconds - start.nanoseconds;
+    const elapsed_s: f64 = @as(f64, @floatFromInt(@as(i64, @intCast(elapsed_ns)))) / @as(f64, @floatFromInt(time.ns_per_s));
     const total_bytes = iterations * data.len;
     const total_bits = @as(f64, @floatFromInt(total_bytes)) * 8.0;
     const throughput_mbps = total_bits / elapsed_s / 1_000_000.0;
@@ -55,7 +56,7 @@ fn benchmarkStdMac(comptime Mac: type, data: []const u8) !BenchResult {
     };
 }
 
-fn benchmarkLeMac(comptime LeMacType: type, data: []const u8) !BenchResult {
+fn benchmarkLeMac(comptime LeMacType: type, data: []const u8) BenchResult {
     var key: [LeMacType.key_size]u8 = undefined;
     var nonce: [LeMacType.nonce_size]u8 = undefined;
     random.bytes(&key);
@@ -65,20 +66,20 @@ fn benchmarkLeMac(comptime LeMacType: type, data: []const u8) !BenchResult {
     var tag: [LeMacType.tag_size]u8 = undefined;
     var iterations: u64 = 0;
 
-    var timer = try Timer.start();
-    const start = timer.lap();
+    const start = Io.Clock.awake.now(global_io);
 
     while (true) {
         tag = LeMacType.mac(&ctx, data, nonce);
         mem.doNotOptimizeAway(&tag);
         iterations += 1;
 
-        const elapsed = timer.read() - start;
-        if (elapsed >= MIN_BENCH_TIME_NS) break;
+        const elapsed = start.durationTo(Io.Clock.awake.now(global_io));
+        if (elapsed.nanoseconds >= MIN_BENCH_TIME.nanoseconds) break;
     }
 
-    const end = timer.read();
-    const elapsed_s = @as(f64, @floatFromInt(end - start)) / time.ns_per_s;
+    const end = Io.Clock.awake.now(global_io);
+    const elapsed_ns = end.nanoseconds - start.nanoseconds;
+    const elapsed_s: f64 = @as(f64, @floatFromInt(@as(i64, @intCast(elapsed_ns)))) / @as(f64, @floatFromInt(time.ns_per_s));
     const total_bytes = iterations * data.len;
     const total_bits = @as(f64, @floatFromInt(total_bytes)) * 8.0;
     const throughput_mbps = total_bits / elapsed_s / 1_000_000.0;
@@ -122,11 +123,11 @@ fn runBenchSuite(
     data_8k: []const u8,
     data_64k: []const u8,
 ) !void {
-    const r64 = try benchFn(data_64);
-    const r256 = try benchFn(data_256);
-    const r1k = try benchFn(data_1k);
-    const r8k = try benchFn(data_8k);
-    const r64k = try benchFn(data_64k);
+    const r64 = benchFn(data_64);
+    const r256 = benchFn(data_256);
+    const r1k = benchFn(data_1k);
+    const r8k = benchFn(data_8k);
+    const r64k = benchFn(data_64k);
 
     try stdout.print("{s:>20} | {s} | {s} | {s} | {s} | {s}\n", .{
         name,
@@ -139,15 +140,15 @@ fn runBenchSuite(
     try stdout.flush();
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    global_io = init.io;
     var stdout_buffer: [0x200]u8 = undefined;
-    const io = Io.Threaded.global_single_threaded.io();
-    var stdout_writer = Io.File.stdout().writer(io, &stdout_buffer);
+    var stdout_writer = Io.File.stdout().writer(init.io, &stdout_buffer);
     const stdout = &stdout_writer.interface;
 
     try stdout.print("MAC Benchmark - Throughput in Mb/s (higher is better)\n", .{});
     try stdout.flush();
-    try stdout.print("Min benchmark time: {d}ms per size\n", .{MIN_BENCH_TIME_NS / time.ns_per_ms});
+    try stdout.print("Min benchmark time: {d}ms per size\n", .{MIN_BENCH_TIME.toMilliseconds()});
     try stdout.flush();
 
     var data_64: [64]u8 = undefined;
@@ -168,7 +169,7 @@ pub fn main() !void {
         stdout,
         "LeMac",
         struct {
-            fn bench(data: []const u8) !BenchResult {
+            fn bench(data: []const u8) BenchResult {
                 return benchmarkLeMac(lemac.LeMac, data);
             }
         }.bench,
@@ -183,7 +184,7 @@ pub fn main() !void {
         stdout,
         "LeMac-X2",
         struct {
-            fn bench(data: []const u8) !BenchResult {
+            fn bench(data: []const u8) BenchResult {
                 return benchmarkLeMac(lemac.LeMacX2, data);
             }
         }.bench,
@@ -198,7 +199,7 @@ pub fn main() !void {
         stdout,
         "LeMac-X4",
         struct {
-            fn bench(data: []const u8) !BenchResult {
+            fn bench(data: []const u8) BenchResult {
                 return benchmarkLeMac(lemac.LeMacX4, data);
             }
         }.bench,
@@ -218,7 +219,7 @@ pub fn main() !void {
         stdout,
         "AEGIS-128L-MAC",
         struct {
-            fn bench(data: []const u8) !BenchResult {
+            fn bench(data: []const u8) BenchResult {
                 return benchmarkStdMac(crypto.auth.aegis.Aegis128LMac, data);
             }
         }.bench,
@@ -233,7 +234,7 @@ pub fn main() !void {
         stdout,
         "AEGIS-128X2-MAC",
         struct {
-            fn bench(data: []const u8) !BenchResult {
+            fn bench(data: []const u8) BenchResult {
                 return benchmarkStdMac(crypto.auth.aegis.Aegis128X2Mac, data);
             }
         }.bench,
@@ -248,7 +249,7 @@ pub fn main() !void {
         stdout,
         "AEGIS-128X4-MAC",
         struct {
-            fn bench(data: []const u8) !BenchResult {
+            fn bench(data: []const u8) BenchResult {
                 return benchmarkStdMac(crypto.auth.aegis.Aegis128X4Mac, data);
             }
         }.bench,
@@ -268,7 +269,7 @@ pub fn main() !void {
         stdout,
         "HMAC-SHA256",
         struct {
-            fn bench(data: []const u8) !BenchResult {
+            fn bench(data: []const u8) BenchResult {
                 return benchmarkStdMac(crypto.auth.hmac.sha2.HmacSha256, data);
             }
         }.bench,
