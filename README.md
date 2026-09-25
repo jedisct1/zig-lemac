@@ -76,4 +76,4 @@ Mb/s - Higher it better
 
 Based on the paper [Fast AES-Based Universal Hash Functions and MACs](https://tosc.iacr.org/index.php/ToSC/article/view/11619) published in IACR Transactions on Symmetric Cryptology, its [corrigendum](https://tosc.iacr.org/index.php/ToSC/article/view/12089), and discussions with Augustin Bariant during FSE 2025.
 
-Original implementation: [lemac](https://github.com/jedisct1/lemac).
+Original implementation: [lemac](https://github.com/jedisct1/zig-lemac).
