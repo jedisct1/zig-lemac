@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = .ReleaseFast;
+    const optimize = .fast;
     const mod = b.addModule("lemac", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("src/benchmark.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
     });
     const bench = b.addExecutable(.{
         .name = "benchmark",
